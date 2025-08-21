@@ -1,0 +1,67 @@
+name: MobSF Advanced Scan
+
+on: 
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    - cron: '17 13 * * 1'
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  mobile-security:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.8, 3.9, 3.10] # test multiple python
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v3
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache MobSF Dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.mobsf
+          key: mobsf-${{ runner.os }}-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            mobsf-${{ runner.os }}-
+
+      - name: Run MobSF Scan
+        uses: MobSF/mobsfscan@a60d10a83af68e23e0b30611c6515da604f06f65
+        with:
+          args: . --sarif --output results.sarif || true
+
+      - name: Upload MobSF Report
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+
+      - name: Notify on Slack
+        if: always()
+        uses: slackapi/slack-github-action@v1.28.0
+        with:
+          channel-id: ${{ secrets.SLACK_CHANNEL }}
+          slack-token: ${{ secrets.SLACK_TOKEN }}
+          text: "✅ MobSF scan completed for branch `${{ github.ref_name }}`"
+
+      - name: Fail if high severity found
+        run: |
+          python3 -c "
+import json
+with open('results.sarif') as f:
+    data = json.load(f)
+issues = [r for r in data['runs'][0]['results'] if r['level']=='error']
+if issues:
+    print('High severity issues found:', len(issues))
+    exit(1)
+"
